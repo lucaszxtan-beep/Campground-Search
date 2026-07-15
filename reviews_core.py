@@ -1,31 +1,85 @@
 import re
+import threading
 import time
-from urllib.parse import quote_plus, urlparse, parse_qs, unquote
+from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 
 import requests
 from bs4 import BeautifulSoup
 
 
-HEADERS = {"User-Agent": "Mozilla/5.0"}
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 Chrome/126.0 Safari/537.36"
+    )
+}
+
 REVIEW_TIME_LIMIT_SECONDS = 5
+
 review_cache = {}
+review_cache_lock = threading.Lock()
+
 
 POSITIVE_WORDS = [
-    "beautiful", "quiet", "clean", "spacious", "scenic", "great", "excellent",
-    "friendly", "private", "peaceful", "nice", "amazing", "family", "shade",
-    "lake", "river", "hiking", "views", "well maintained", "large", "good",
-    "wonderful", "favorite", "recommend", "loved"
+    "beautiful",
+    "quiet",
+    "clean",
+    "spacious",
+    "scenic",
+    "great",
+    "excellent",
+    "friendly",
+    "private",
+    "peaceful",
+    "nice",
+    "amazing",
+    "family",
+    "shade",
+    "lake",
+    "river",
+    "hiking",
+    "views",
+    "well maintained",
+    "large",
+    "good",
+    "wonderful",
+    "favorite",
+    "recommend",
+    "loved",
 ]
 
 NEGATIVE_WORDS = [
-    "noisy", "crowded", "dirty", "small", "tight", "bugs", "mosquito",
-    "dusty", "rough", "poor", "bad", "limited", "traffic", "generator",
-    "close together", "no privacy", "steep", "problem", "broken"
+    "noisy",
+    "crowded",
+    "dirty",
+    "small",
+    "tight",
+    "bugs",
+    "mosquito",
+    "dusty",
+    "rough",
+    "poor",
+    "bad",
+    "limited",
+    "traffic",
+    "generator",
+    "close together",
+    "no privacy",
+    "steep",
+    "problem",
+    "broken",
 ]
 
+
 SOURCE_DOMAINS = [
-    "recreation.gov", "campendium.com", "thedyrt.com", "tripadvisor.com",
-    "yelp.com", "reddit.com", "rvlife.com", "campgroundreviews.com",
+    "recreation.gov",
+    "campendium.com",
+    "thedyrt.com",
+    "tripadvisor.com",
+    "yelp.com",
+    "reddit.com",
+    "rvlife.com",
+    "campgroundreviews.com",
 ]
 
 
@@ -33,19 +87,28 @@ def clean_text(text):
     return re.sub(r"\s+", " ", text or "").strip()
 
 
-def time_left(start_time):
-    return REVIEW_TIME_LIMIT_SECONDS - (time.time() - start_time)
+def remaining_time(start_time):
+    return REVIEW_TIME_LIMIT_SECONDS - (
+        time.monotonic() - start_time
+    )
 
 
 def safe_get(url, start_time):
-    remaining = time_left(start_time)
+    remaining = remaining_time(start_time)
 
     if remaining <= 0:
-        raise TimeoutError("Review search time limit reached.")
+        raise TimeoutError(
+            "The review search reached its time limit."
+        )
 
-    r = requests.get(url, headers=HEADERS, timeout=max(1, min(remaining, 2.0)))
-    r.raise_for_status()
-    return r
+    response = requests.get(
+        url,
+        headers=HEADERS,
+        timeout=max(0.5, min(remaining, 1.8)),
+    )
+
+    response.raise_for_status()
+    return response
 
 
 def extract_duckduckgo_url(href):
@@ -67,166 +130,301 @@ def extract_duckduckgo_url(href):
 
 def fetch_page_text(url, start_time):
     try:
-        r = safe_get(url, start_time)
+        response = safe_get(url, start_time)
     except Exception:
         return ""
 
-    soup = BeautifulSoup(r.text, "html.parser")
+    soup = BeautifulSoup(response.text, "html.parser")
 
-    for tag in soup(["script", "style", "noscript", "svg"]):
+    for tag in soup(
+        ["script", "style", "noscript", "svg"]
+    ):
         tag.decompose()
 
-    return clean_text(soup.get_text(" "))[:8000]
+    return clean_text(
+        soup.get_text(" ")
+    )[:7000]
 
 
-def get_search_result_links(query, start_time, max_links=6):
+def get_search_result_links(
+    query,
+    start_time,
+    max_links=5,
+):
+    search_url = (
+        "https://duckduckgo.com/html/?q="
+        f"{quote_plus(query)}"
+    )
+
     try:
-        r = safe_get(f"https://duckduckgo.com/html/?q={quote_plus(query)}", start_time)
+        response = safe_get(search_url, start_time)
     except Exception:
         return []
 
-    soup = BeautifulSoup(r.text, "html.parser")
+    soup = BeautifulSoup(response.text, "html.parser")
     links = []
 
-    for a in soup.find_all("a", href=True):
-        href = extract_duckduckgo_url(a.get("href"))
+    selectors = [
+        ".result__a",
+        "a[href]",
+    ]
 
-        if not href:
-            continue
+    for selector in selectors:
+        for anchor in soup.select(selector):
+            href = extract_duckduckgo_url(
+                anchor.get("href")
+            )
 
-        lower = href.lower()
+            if not href:
+                continue
 
-        if any(blocked in lower for blocked in ["facebook", "instagram", "login", "signin"]):
-            continue
+            lower_url = href.lower()
 
-        if any(domain in lower for domain in SOURCE_DOMAINS):
+            if any(
+                blocked in lower_url
+                for blocked in [
+                    "facebook.com",
+                    "instagram.com",
+                    "pinterest.com",
+                    "login",
+                    "signin",
+                ]
+            ):
+                continue
+
+            if not any(
+                domain in lower_url
+                for domain in SOURCE_DOMAINS
+            ):
+                continue
+
             if href not in links:
                 links.append(href)
 
-        if len(links) >= max_links:
-            break
+            if len(links) >= max_links:
+                return links
 
     return links
 
 
 def collect_review_text(campground):
-    start_time = time.time()
-    name = campground["name"]
-    pieces = []
+    start_time = time.monotonic()
+    campground_name = campground["name"]
 
-    official_text = fetch_page_text(campground["url"], start_time)
+    text_parts = []
+
+    official_text = fetch_page_text(
+        campground["url"],
+        start_time,
+    )
+
     if official_text:
-        pieces.append(official_text)
+        text_parts.append(official_text)
 
     queries = [
-        f'"{name}" campground reviews',
-        f'"{name}" camping reviews',
-        f'"{name}" Reddit campground',
-        f'"{name}" The Dyrt',
-        f'"{name}" Campendium',
+        f'"{campground_name}" campground reviews',
+        f'"{campground_name}" camping reviews',
+        f'"{campground_name}" Reddit campground',
+        f'"{campground_name}" The Dyrt',
+        f'"{campground_name}" Campendium',
     ]
 
-    visited = set()
+    visited_urls = set()
 
     for query in queries:
-        if time_left(start_time) <= 0:
+        if remaining_time(start_time) <= 0:
             break
 
-        for link in get_search_result_links(query, start_time):
-            if time_left(start_time) <= 0:
+        result_links = get_search_result_links(
+            query,
+            start_time,
+            max_links=4,
+        )
+
+        for link in result_links:
+            if remaining_time(start_time) <= 0:
                 break
 
-            if link in visited:
+            if link in visited_urls:
                 continue
 
-            visited.add(link)
-            text = fetch_page_text(link, start_time)
+            visited_urls.add(link)
+            page_text = fetch_page_text(
+                link,
+                start_time,
+            )
 
-            if text and any(word in text.lower() for word in ["campground", "camping", "campsite"]):
-                pieces.append(text[:5000])
+            if not page_text:
+                continue
 
-    return "\n".join(pieces)
+            lower_text = page_text.lower()
+
+            if any(
+                term in lower_text
+                for term in [
+                    "campground",
+                    "camping",
+                    "campsite",
+                ]
+            ):
+                text_parts.append(page_text[:4500])
+
+    return "\n".join(text_parts)
 
 
 def count_words(text, words):
-    lower = text.lower()
-    return sum(lower.count(word) for word in words)
+    lower_text = text.lower()
+
+    return sum(
+        lower_text.count(word)
+        for word in words
+    )
 
 
 def extract_comment_summary(text):
-    lower = text.lower()
+    lower_text = text.lower()
 
-    positives = []
-    negatives = []
-
-    pos_patterns = [
-        ("Scenic setting", ["beautiful", "scenic", "views", "view"]),
-        ("Quiet atmosphere", ["quiet", "peaceful"]),
-        ("Family friendly", ["family", "kids", "children"]),
-        ("Clean / maintained", ["clean", "well maintained"]),
-        ("Shade / forest", ["shade", "forested", "trees"]),
-        ("Good hiking or water access", ["hiking", "trail", "lake", "river"]),
+    positive_patterns = [
+        (
+            "Scenic surroundings",
+            ["beautiful", "scenic", "views", "view"],
+        ),
+        (
+            "Quiet atmosphere",
+            ["quiet", "peaceful"],
+        ),
+        (
+            "Family-friendly environment",
+            ["family", "kids", "children"],
+        ),
+        (
+            "Clean or well-maintained facilities",
+            ["clean", "well maintained"],
+        ),
+        (
+            "Shade or forested surroundings",
+            ["shade", "forested", "trees"],
+        ),
+        (
+            "Access to hiking or water",
+            ["hiking", "trail", "lake", "river"],
+        ),
     ]
 
-    neg_patterns = [
-        ("Crowded / busy", ["crowded", "busy"]),
-        ("Sites close together", ["close together", "no privacy"]),
-        ("Noise", ["noisy", "generator", "traffic"]),
-        ("Bugs / mosquitoes", ["bugs", "mosquito"]),
-        ("Small / tight sites", ["small", "tight"]),
-        ("Limited service", ["limited", "no cell", "cell signal"]),
+    negative_patterns = [
+        (
+            "May become crowded",
+            ["crowded", "busy"],
+        ),
+        (
+            "Some sites may offer limited privacy",
+            ["close together", "no privacy"],
+        ),
+        (
+            "Noise may be present",
+            ["noisy", "generator", "traffic"],
+        ),
+        (
+            "Insects or mosquitoes may be present",
+            ["bugs", "mosquito"],
+        ),
+        (
+            "Some sites may be small or difficult to access",
+            ["small", "tight"],
+        ),
+        (
+            "Cell service or facilities may be limited",
+            ["limited", "no cell", "cell signal"],
+        ),
     ]
 
-    for label, keys in pos_patterns:
-        if any(k in lower for k in keys):
-            positives.append(label)
+    strengths = []
+    concerns = []
 
-    for label, keys in neg_patterns:
-        if any(k in lower for k in keys):
-            negatives.append(label)
+    for label, keywords in positive_patterns:
+        if any(
+            keyword in lower_text
+            for keyword in keywords
+        ):
+            strengths.append(label)
 
-    return positives[:4], negatives[:4]
+    for label, keywords in negative_patterns:
+        if any(
+            keyword in lower_text
+            for keyword in keywords
+        ):
+            concerns.append(label)
+
+    return strengths[:4], concerns[:4]
 
 
 def score_reviews_from_text(text):
     if not text or len(text) < 300:
         return {
             "review_score": 70,
-            "confidence": "none",
+            "confidence": "unavailable",
             "positives": [],
             "negatives": [],
-            "important": ["Review data limited"],
+            "important": [
+                "Limited public review information was found."
+            ],
         }
 
-    positive_count = count_words(text, POSITIVE_WORDS)
-    negative_count = count_words(text, NEGATIVE_WORDS)
+    positive_count = count_words(
+        text,
+        POSITIVE_WORDS,
+    )
 
-    raw = 70 + positive_count * 2.5 - negative_count * 3.5
-    score = int(max(30, min(98, raw)))
+    negative_count = count_words(
+        text,
+        NEGATIVE_WORDS,
+    )
 
-    positives, negatives = extract_comment_summary(text)
+    raw_score = (
+        70
+        + positive_count * 2.0
+        - negative_count * 3.0
+    )
 
-    confidence = "low"
-    if len(text) > 5000:
-        confidence = "medium"
-    if len(text) > 15000:
+    review_score = int(
+        max(30, min(95, raw_score))
+    )
+
+    strengths, concerns = (
+        extract_comment_summary(text)
+    )
+
+    if len(text) > 12000:
         confidence = "high"
+    elif len(text) > 4500:
+        confidence = "moderate"
+    else:
+        confidence = "limited"
 
     return {
-        "review_score": score,
+        "review_score": review_score,
         "confidence": confidence,
-        "positives": positives,
-        "negatives": negatives,
-        "important": [f"Review confidence: {confidence}"],
+        "positives": strengths,
+        "negatives": concerns,
+        "important": [
+            f"Public review-data confidence: {confidence}."
+        ],
     }
 
 
 def get_campground_review_summary(campground):
-    campground_id = campground["id"]
+    campground_id = str(campground["id"])
 
-    if campground_id in review_cache:
-        return review_cache[campground_id]
+    with review_cache_lock:
+        cached = review_cache.get(campground_id)
 
-    result = score_reviews_from_text(collect_review_text(campground))
-    review_cache[campground_id] = result
-    return result
+    if cached is not None:
+        return cached
+
+    review_text = collect_review_text(campground)
+    summary = score_reviews_from_text(review_text)
+
+    with review_cache_lock:
+        review_cache[campground_id] = summary
+
+    return summary

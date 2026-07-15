@@ -1,65 +1,149 @@
 import requests
 
-HEADERS = {"User-Agent": "Mozilla/5.0"}
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 Chrome/126.0 Safari/537.36"
+    )
+}
 
 
 def extract_coordinates(item):
     if not isinstance(item, dict):
         return None, None
 
-    lat_keys = ["latitude", "Latitude", "lat", "FacilityLatitude", "RecAreaLatitude"]
-    lon_keys = ["longitude", "Longitude", "lon", "lng", "FacilityLongitude", "RecAreaLongitude"]
+    latitude_keys = [
+        "latitude",
+        "Latitude",
+        "lat",
+        "FacilityLatitude",
+        "RecAreaLatitude",
+        "facility_latitude",
+    ]
 
-    lat = next((item.get(k) for k in lat_keys if item.get(k) not in [None, ""]), None)
-    lon = next((item.get(k) for k in lon_keys if item.get(k) not in [None, ""]), None)
+    longitude_keys = [
+        "longitude",
+        "Longitude",
+        "lon",
+        "lng",
+        "FacilityLongitude",
+        "RecAreaLongitude",
+        "facility_longitude",
+    ]
+
+    latitude = next(
+        (
+            item.get(key)
+            for key in latitude_keys
+            if item.get(key) not in (None, "")
+        ),
+        None,
+    )
+
+    longitude = next(
+        (
+            item.get(key)
+            for key in longitude_keys
+            if item.get(key) not in (None, "")
+        ),
+        None,
+    )
 
     try:
-        return float(lat), float(lon)
-    except Exception:
+        return float(latitude), float(longitude)
+    except (TypeError, ValueError):
         return None, None
 
 
 def search_campgrounds(query):
-    url = "https://www.recreation.gov/api/search"
-    params = {"q": query, "inventory_type": "camping", "size": 50}
+    query = query.strip()
 
-    r = requests.get(url, params=params, headers=HEADERS, timeout=20)
-    r.raise_for_status()
+    if not query:
+        return []
 
-    matches = []
+    response = requests.get(
+        "https://www.recreation.gov/api/search",
+        params={
+            "q": query,
+            "inventory_type": "camping",
+            "size": 50,
+        },
+        headers=HEADERS,
+        timeout=20,
+    )
 
-    for item in r.json().get("results", []):
+    response.raise_for_status()
+    results = response.json().get("results", [])
+
+    campgrounds = []
+    seen_ids = set()
+
+    for item in results:
         name = item.get("name") or item.get("title")
         entity_id = item.get("entity_id") or item.get("id")
-        entity_type = item.get("entity_type", "")
+        entity_type = str(item.get("entity_type", "")).lower()
 
         if not name or not entity_id:
             continue
 
-        if "campground" not in name.lower() and entity_type != "campground":
+        entity_id = str(entity_id)
+
+        if entity_id in seen_ids:
             continue
 
-        lat, lon = extract_coordinates(item)
+        name_lower = name.lower()
 
-        matches.append({
-            "name": name,
-            "id": str(entity_id),
-            "latitude": lat,
-            "longitude": lon,
-            "url": f"https://www.recreation.gov/camping/campgrounds/{entity_id}",
-        })
+        is_campground = (
+            entity_type == "campground"
+            or "campground" in name_lower
+            or item.get("inventory_type") == "camping"
+        )
 
-    return matches
+        if not is_campground:
+            continue
+
+        latitude, longitude = extract_coordinates(item)
+
+        campgrounds.append(
+            {
+                "name": name,
+                "id": entity_id,
+                "latitude": latitude,
+                "longitude": longitude,
+                "url": (
+                    "https://www.recreation.gov/camping/campgrounds/"
+                    f"{entity_id}"
+                ),
+            }
+        )
+
+        seen_ids.add(entity_id)
+
+    return campgrounds
 
 
 def get_month_availability(campground_id, month_date):
-    url = f"https://www.recreation.gov/api/camps/availability/campground/{campground_id}/month"
-    params = {"start_date": month_date.strftime("%Y-%m-%dT00:00:00.000Z")}
+    url = (
+        "https://www.recreation.gov/api/camps/availability/"
+        f"campground/{campground_id}/month"
+    )
 
-    r = requests.get(url, params=params, headers=HEADERS, timeout=20)
+    response = requests.get(
+        url,
+        params={
+            "start_date": month_date.strftime(
+                "%Y-%m-%dT00:00:00.000Z"
+            )
+        },
+        headers=HEADERS,
+        timeout=20,
+    )
 
-    if r.status_code == 404:
-        raise ValueError("Availability could not be found for this campground.")
+    if response.status_code == 404:
+        raise ValueError(
+            "Availability information was not found for this campground."
+        )
 
-    r.raise_for_status()
-    return r.json()
+    response.raise_for_status()
+    return response.json()
