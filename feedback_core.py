@@ -1,70 +1,130 @@
 import json
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
-from datetime import datetime
 
-FEEDBACK_FILE = Path("feedback_data.json")
+
+FEEDBACK_FILE = (
+    Path(__file__).resolve().parent
+    / "feedback_data.json"
+)
+
+feedback_lock = threading.Lock()
+
+
+def empty_feedback():
+    return {}
 
 
 def load_feedback():
     if not FEEDBACK_FILE.exists():
-        return {}
+        return empty_feedback()
 
     try:
-        with open(FEEDBACK_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
+        with FEEDBACK_FILE.open(
+            "r",
+            encoding="utf-8",
+        ) as file:
+            data = json.load(file)
+
+        return data if isinstance(data, dict) else {}
+    except (
+        OSError,
+        json.JSONDecodeError,
+    ):
         return {}
 
 
 def save_feedback(data):
-    with open(FEEDBACK_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    temporary_file = FEEDBACK_FILE.with_suffix(
+        ".json.tmp"
+    )
+
+    with temporary_file.open(
+        "w",
+        encoding="utf-8",
+    ) as file:
+        json.dump(
+            data,
+            file,
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    temporary_file.replace(FEEDBACK_FILE)
 
 
 def add_feedback(campground, vote):
-    data = load_feedback()
-    campground_id = campground["id"]
+    if vote not in {"up", "down"}:
+        raise ValueError(
+            "Vote must be 'up' or 'down'."
+        )
 
-    if campground_id not in data:
-        data[campground_id] = {
-            "name": campground["name"],
-            "thumbs_up": 0,
-            "thumbs_down": 0,
-            "history": []
-        }
+    campground_id = str(campground["id"])
 
-    if vote == "up":
-        data[campground_id]["thumbs_up"] += 1
-    elif vote == "down":
-        data[campground_id]["thumbs_down"] += 1
+    with feedback_lock:
+        data = load_feedback()
 
-    data[campground_id]["history"].append({
-        "vote": vote,
-        "time": datetime.now().isoformat()
-    })
+        record = data.setdefault(
+            campground_id,
+            {
+                "name": campground["name"],
+                "thumbs_up": 0,
+                "thumbs_down": 0,
+                "history": [],
+            },
+        )
 
-    save_feedback(data)
+        record["name"] = campground["name"]
+
+        if vote == "up":
+            record["thumbs_up"] = (
+                int(record.get("thumbs_up", 0)) + 1
+            )
+        else:
+            record["thumbs_down"] = (
+                int(record.get("thumbs_down", 0)) + 1
+            )
+
+        record.setdefault("history", []).append(
+            {
+                "vote": vote,
+                "timestamp": datetime.now(
+                    timezone.utc
+                ).isoformat(),
+            }
+        )
+
+        save_feedback(data)
 
 
 def get_feedback_summary(campground):
-    data = load_feedback()
-    campground_id = campground["id"]
+    campground_id = str(campground["id"])
 
-    if campground_id not in data:
-        return {
-            "thumbs_up": 0,
-            "thumbs_down": 0,
-            "total": 0,
-            "percent_positive": None
-        }
+    with feedback_lock:
+        data = load_feedback()
 
-    up = data[campground_id].get("thumbs_up", 0)
-    down = data[campground_id].get("thumbs_down", 0)
-    total = up + down
+    record = data.get(campground_id, {})
+
+    thumbs_up = int(
+        record.get("thumbs_up", 0)
+    )
+
+    thumbs_down = int(
+        record.get("thumbs_down", 0)
+    )
+
+    total = thumbs_up + thumbs_down
+
+    positive_percentage = (
+        round(thumbs_up / total * 100, 1)
+        if total
+        else None
+    )
 
     return {
-        "thumbs_up": up,
-        "thumbs_down": down,
+        "thumbs_up": thumbs_up,
+        "thumbs_down": thumbs_down,
         "total": total,
-        "percent_positive": round(up / total * 100, 1) if total else None
+        "percent_positive": positive_percentage,
     }
