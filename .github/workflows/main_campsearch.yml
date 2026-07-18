@@ -1,11 +1,13 @@
+# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
+# More GitHub Actions for Azure: https://github.com/Azure/actions
+# More info on Python, GitHub Actions, and Azure App Service: https://aka.ms/python-webapps-actions
 
-<<<<<<< HEAD
-name: Build and deploy Python app to Azure Web App - lucas-test1
+name: Build and deploy Python app to Azure Web App - campsearch
 
 on:
   push:
     branches:
-      - user/lucas/testing
+      - main
   workflow_dispatch:
 
 jobs:
@@ -61,17 +63,14 @@ jobs:
       - name: Login to Azure
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_12A74F86E1854C89BE337C184F5B70C9 }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_D7F3DBA64BE4434E90E8E543F2F18400 }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_7B155B430A32497AA220975679853AA3 }}
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_A0D5E572A1624B65AB6C7D7DB226255C }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_8F59F23EB37343A59AAC895382779445 }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_6F8563F0E6964CD58BD9D9F2452225B4 }}
 
       - name: 'Deploy to Azure Web App'
         uses: azure/webapps-deploy@v3
         id: deploy-to-webapp
         with:
-          app-name: 'lucas-test1'
+          app-name: 'campsearch'
           slot-name: 'Production'
-          startup-command: 'bash startup.sh'
           
-=======
->>>>>>> d910a33dfa31be81a3d0714563856a4fc85b0ef4
