@@ -63,9 +63,9 @@ jobs:
       - name: Login to Azure
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_CE800063E7924183A207154EF6B5B9D5 }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_5DDAFBFEBE1F49348F56A8E47AE59BE9 }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F171750221B343728DC35662A47FB892 }}
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_A0D5E572A1624B65AB6C7D7DB226255C }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_8F59F23EB37343A59AAC895382779445 }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_6F8563F0E6964CD58BD9D9F2452225B4 }}
 
       - name: 'Deploy to Azure Web App'
         uses: azure/webapps-deploy@v3
@@ -73,5 +73,4 @@ jobs:
         with:
           app-name: 'campsearch'
           slot-name: 'Production'
-          startup-command: 'bash startup.sh'
           
